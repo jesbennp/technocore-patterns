@@ -1,0 +1,129 @@
+{
+  "$schema": "https://technocore.dev/schemas/claim-graph/v1.json",
+  "graph_id": "did:key:z6MkrecAttestationChainDemo0000000000000000000000000",
+  "version": "1.0.0",
+  "description": "A realistic, copy-pasteable example graph demonstrating recursive attestation: a root employment claim that depends on a background-check claim, which itself depends on two identity claims, one of which is disclosed via a Merkle selective-disclosure proof. Pair with patterns/claim-graph-resolver and patterns/selective-disclosure-merkle-proof.",
+  "subject": "did:key:z6MksubjectEmployee000000000000000000000000000000",
+  "claims": [
+    {
+      "id": "claim:employment:full-time",
+      "type": "EmploymentStatus",
+      "issuer": "did:key:z6MkemployerAcmeCorp000000000000000000000000000000",
+      "issuedAt": "2025-11-01T09:00:00Z",
+      "expiresAt": "2026-11-01T09:00:00Z",
+      "claim": {
+        "employer": "Acme Corp",
+        "role": "Senior Engineer",
+        "status": "full_time",
+        "startDate": "2024-03-15"
+      }
+    },
+    {
+      "id": "claim:background-check:standard",
+      "type": "BackgroundCheckResult",
+      "issuer": "did:key:z6MkbackgroundCheckerSafeHire000000000000000000000",
+      "issuedAt": "2025-10-15T14:30:00Z",
+      "expiresAt": "2026-04-15T14:30:00Z",
+      "claim": {
+        "checkLevel": "standard",
+        "result": "clear",
+        "jurisdiction": "US-CA"
+      }
+    },
+    {
+      "id": "claim:identity:government-id",
+      "type": "GovernmentID",
+      "issuer": "did:key:z6MkgovIssuerCaliforniaDMV000000000000000000000000",
+      "issuedAt": "2024-06-20T00:00:00Z",
+      "claim": {
+        "idType": "drivers_license",
+        "idNumber": "D1234567",
+        "fullName": "Alex Q. Subject",
+        "dateOfBirth": "1990-04-12",
+        "state": "CA"
+      }
+    },
+    {
+      "id": "claim:identity:residency-proof",
+      "type": "ProofOfResidency",
+      "issuer": "did:key:z6MkutilityPGandE00000000000000000000000000000000",
+      "issuedAt": "2025-09-01T00:00:00Z",
+      "expiresAt": "2026-09-01T00:00:00Z",
+      "claim": {
+        "addressLine1": "123 Main St",
+        "city": "San Francisco",
+        "state": "CA",
+        "postalCode": "94105",
+        "country": "US"
+      }
+    },
+    {
+      "id": "claim:selective-disclosure:age-over-21",
+      "type": "AgeOverThreshold",
+      "issuer": "did:key:z6MkgovIssuerCaliforniaDMV000000000000000000000000",
+      "issuedAt": "2024-06-20T00:00:00Z",
+      "claim": {
+        "threshold": 21,
+        "subjectDid": "did:key:z6MksubjectEmployee000000000000000000000000000000"
+      },
+      "selectiveDisclosure": {
+        "scheme": "merkle-proof-2025",
+        "merkleRoot": "9f2a4c1b8d3e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f70819283a4b",
+        "revealedLeaves": [
+          { "path": "dateOfBirth", "value": "1990-04-12" }
+        ],
+        "hiddenLeaves": ["idNumber", "fullName", "addressHistory"],
+        "proof": [
+          { "position": "left", "hash": "1a2b3c4d5e6f70819283a4b5c6d7e8f9001122334455667788990aabbccddeef" },
+          { "position": "right", "hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "from": "claim:employment:full-time",
+      "to": "claim:background-check:standard",
+      "relation": "requires",
+      "policy": "employment.full_time requires background_check.standard.result == 'clear'"
+    },
+    {
+      "from": "claim:background-check:standard",
+      "to": "claim:identity:government-id",
+      "relation": "requires",
+      "policy": "background_check.standard requires verified government_id for jurisdiction match"
+    },
+    {
+      "from": "claim:background-check:standard",
+      "to": "claim:identity:residency-proof",
+      "relation": "requires",
+      "policy": "background_check.standard requires proof_of_residency with matching jurisdiction (US-CA)"
+    },
+    {
+      "from": "claim:employment:full-time",
+      "to": "claim:selective-disclosure:age-over-21",
+      "relation": "requires",
+      "policy": "employment.full_time requires age_over_21.threshold == 21 and issuer in trusted_issuers"
+    }
+  ],
+  "resolution": {
+    "rootClaim": "claim:employment:full-time",
+    "strategy": "depth-first",
+    "failOnMissingDependency": true,
+    "requireNonExpired": true,
+    "maxDepth": 3
+  },
+  "expectedResolution": {
+    "valid": true,
+    "trustChain": [
+      "claim:selective-disclosure:age-over-21",
+      "claim:identity:residency-proof",
+      "claim:identity:government-id",
+      "claim:background-check:standard",
+      "claim:employment:full-time"
+    ],
+    "notes": "The age-over-21 claim is satisfied without revealing the subject's full name, ID number, or address history — the Merkle proof confirms only that a leaf with dateOfBirth=1990-04-12 exists under the committed root."
+  }
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
