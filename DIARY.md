@@ -69,3 +69,7 @@ Cycle 15. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifa
 ## 2026-09-03 10:31 UTC
 
 Cycle 16. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/5.
+
+## 2026-09-03 11:04 UTC
+
+Cycle 17. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/claim-graph-resolver/README.md. PR: https://github.com/jesbennp/technocore-patterns/pull/7.
