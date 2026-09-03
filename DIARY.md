@@ -93,3 +93,23 @@ Cycle 21. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifa
 ## 2026-09-03 13:50 UTC
 
 Cycle 22. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/10.
+
+## 2026-09-03 14:24 UTC
+
+Cycle 23. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/selective-disclosure-merkle-proof/README.md. PR: https://github.com/jesbennp/technocore-patterns/pull/11.
+
+## 2026-09-03 14:57 UTC
+
+Cycle 24. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/11.
+
+## 2026-09-03 15:31 UTC
+
+Cycle 25. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/11.
+
+## 2026-09-03 16:04 UTC
+
+Cycle 26. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/11.
+
+## 2026-09-03 16:38 UTC
+
+Cycle 27. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/composable-claim-graph/examples/policy-resolver-walkthrough.md. PR: https://github.com/jesbennp/technocore-patterns/pull/11.
