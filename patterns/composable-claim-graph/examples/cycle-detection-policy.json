@@ -1,0 +1,77 @@
+{
+  "$schema": "https://technocore.chat/schemas/claim-graph-policy/v1.json",
+  "name": "deny-on-cycles",
+  "description": "Rejects any claim graph that contains a cycle in the attestation edges. Demonstrates combining the cycle-detector primitive with a policy evaluator so a resolver can fail closed on circular trust.",
+  "version": "1.0.0",
+  "rules": [
+    {
+      "id": "no-attestation-cycles",
+      "when": {
+        "kind": "edge",
+        "predicate": "attests",
+        "graph": "$.claim_graph"
+      },
+      "check": {
+        "primitive": "cycle-detector",
+        "with": {
+          "edge_predicates": ["attests", "delegates-to"],
+          "max_depth": 64
+        }
+      },
+      "on_violation": {
+        "action": "deny",
+        "code": "CCG_CYCLE_DETECTED",
+        "message": "Circular attestation chain detected; trust is not well-founded."
+      }
+    },
+    {
+      "id": "max-fanout-per-issuer",
+      "when": {
+        "kind": "node",
+        "selector": "$.claim_graph.nodes[?(@.role=='issuer')]"
+      },
+      "check": {
+        "op": "lte",
+        "left": { "ref": "$.out_degree" },
+        "right": 16
+      },
+      "on_violation": {
+        "action": "deny",
+        "code": "CCG_FANOUT_EXCEEDED",
+        "message": "Issuer exceeds maximum attestation fanout of 16."
+      }
+    },
+    {
+      "id": "require-root-issuer-self-attest",
+      "when": {
+        "kind": "node",
+        "selector": "$.claim_graph.nodes[?(@.role=='issuer' && @.is_root==true)]"
+      },
+      "check": {
+        "op": "exists",
+        "ref": "$.self_attestation"
+      },
+      "on_violation": {
+        "action": "deny",
+        "code": "CCG_ROOT_MISSING_SELF_ATTEST",
+        "message": "Root issuer must publish a self-attestation claim."
+      }
+    }
+  ],
+  "expected_outcome": {
+    "valid_graph": "policy/ok",
+    "cyclic_graph": "deny(CCG_CYCLE_DETECTED)",
+    "high_fanout_graph": "deny(CCG_FANOUT_EXCEEDED)",
+    "rootless_graph": "deny(CCG_ROOT_MISSING_SELF_ATTEST)"
+  },
+  "worked_example": {
+    "comment": "Feed this graph into claim-graph-resolver with policy=deny-on-cycles. The resolver calls cycle-detector on edges of predicate 'attests' or 'delegates-to', then runs the fanout and root checks. Any cycle yields CCG_CYCLE_DETECTED and the resolver returns { ok: false, code: 'CCG_CYCLE_DETECTED' }.",
+    "graph_ref": "patterns/composable-claim-graph/examples/recursive-attestation-chain.json",
+    "call": {
+      "language": "typescript",
+      "snippet": "import { resolve } from '../claim-graph-resolver/src/resolver';\nimport { evaluatePolicy } from '../claim-graph-resolver/src/policy-evaluator';\nimport { detectCycles } from '../claim-graph-resolver/src/cycle-detector';\nimport policy from './cycle-detection-policy.json';\nimport graph from './recursive-attestation-chain.json';\n\nconst cycles = detectCycles(graph, { edgePredicates: ['attests','delegates-to'], maxDepth: 64 });\nif (cycles.length > 0) {\n  console.error('CYCLE:', cycles);\n  process.exit(2);\n}\nconst result = evaluatePolicy(graph, policy);\nif (!result.ok) {\n  console.error('POLICY:', result.code, result.message);\n  process.exit(3);\n}\nconst resolved = resolve(graph, { policy });\nconsole.log(resolved);"
+    }
+  }
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
