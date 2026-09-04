@@ -1,140 +1,97 @@
-# Composable Claim Graph
+# Composable Claim Graph Pattern
 
-A protocol pattern for chaining signed claims into a verifiable dependency graph,
-where each claim can attest to, depend on, or supersede other claims. Useful
-for building auditable workflows on top of any signed-message substrate
-(technocore.chat, Nostr, did:key, JWT, etc.) without trusting a central index.
+A claim graph is a directed acyclic graph (DAG) of attestations where each node
+is a cryptographically verifiable claim and each edge expresses a dependency
+("this claim is valid because of X, Y, Z"). The graph is composed from multiple
+issuers and resolved by a verifier before any authorization decision is made.
 
-## Why a graph?
+This pattern generalizes the single-issuer verifiable credential model. Instead
+of trusting one root signature, the verifier walks the graph, checks each edge,
+and evaluates a policy over the resolved subgraph.
 
-Linear claim chains (claim N references claim N-1) work, but break down when:
+## When to use
 
-- multiple parallel issuers contribute to a single decision,
-- a claim is partially superseded by a later, narrower claim,
-- you want to prove "claim X is the *latest* still-valid statement on topic T".
+Use a claim graph when:
 
-A directed acyclic graph of claims, signed individually, lets each participant
-publish a node that points to the parent IDs it considers authoritative. Any
-verifier can reconstruct the state by walking edges.
+- A decision depends on **multiple issuers** (e.g. KYC + employer + device posture).
+- You need to **compose proofs** across trust domains (org A vouches for an
+  identity provider that vouches for a device).
+- You want **policy-as-code** over the resolved graph, not just the leaf claim.
+- You must detect **circular or self-referential attestations** before trusting them.
+
+Do NOT use a claim graph when a single signed JWT or SD-JWT VC is sufficient.
 
 ## Node shape
 
-Every claim is a self-contained signed JSON object:
-
-```json
+```jsonc
 {
-  "v": "ccg/1",
-  "id": "<sha256 of canonical payload, hex>",
-  "issuer": "<did:key:...>",
-  "topic": "order#4421",
-  "kind": "approve | reject | supersede | attest | comment",
-  "statement": {"amount": 100, "currency": "USD"},
-  "parents": ["<other claim id>", "..."],
-  "ctime": "<ISO-8601>",
-  "nonce": "<random 16 bytes hex>"
+  "id": "urn:claim:abc123",
+  "type": "IdentityAssertion",
+  "issuer": "did:key:z6Mk...",
+  "subject": "did:key:z6Mn...",
+  "issued": "2025-01-15T10:00:00Z",
+  "expires": "2025-07-15T10:00:00Z",
+  "dependsOn": ["urn:claim:xyz789"],   // edges into parent claims
+  "proof": { /* JWS or CWT over canonical(node without proof) */ }
 }
 ```
 
-The signature is produced over the canonical JSON of the payload (sorted keys,
-no whitespace) using the issuer's signing key, stored alongside as
-`"sig": "<base64url>"`.
+Edges (`dependsOn`) form a DAG. Any cycle is a hard failure — see
+`cycle-detection-policy.json` and the `cycle-detector.ts` reference
+implementation in `../claim-graph-resolver/src/`.
 
-## Worked example: a three-issuer approval
+## Resolution algorithm
 
-Three signers must all approve order `order#4421`. Each publishes a claim:
+1. **Fetch** the root claim requested by the relying party.
+2. **Recurse** into each `dependsOn` until leaves are reached (cap depth, e.g. 8).
+3. **Verify** each node's proof against its issuer's published verification key.
+4. **Check** freshness (`now < expires`, optional `issued` lower bound).
+5. **Detect cycles** via DFS coloring (white/gray/black) on the in-flight fetch set.
+6. **Evaluate policy** over the resolved subgraph; emit an allow/deny plus the
+   minimal witness subgraph that justified the decision.
 
-```ts
-import { canonicalize, sign, verify, Claim, ClaimStore } from "./claim-graph";
+## Worked example
 
-const store = new ClaimStore();
+See `examples/recursive-attestation-chain.json` for a 3-node chain:
 
-const a = await Claim.create({
-  issuer: didA,
-  signer: signerA,
-  topic: "order#4421",
-  kind: "approve",
-  statement: { amount: 100, currency: "USD" },
-  parents: [],
-});
-
-const b = await Claim.create({
-  issuer: didB,
-  signer: signerB,
-  topic: "order#4421",
-  kind: "approve",
-  statement: { amount: 100, currency: "USD" },
-  parents: [a.id], // B explicitly cites A's claim
-});
-
-const c = await Claim.create({
-  issuer: didC,
-  signer: signerC,
-  topic: "order#4421",
-  kind: "approve",
-  statement: { amount: 100, currency: "USD" },
-  parents: [a.id, b.id],
-});
-
-store.add(a); store.add(b); store.add(c);
-
-// Verifier walks the DAG to find the latest state per topic:
-const head = store.head("order#4421", (claim) => claim.kind === "approve");
-console.log(head?.id === c.id); // true
-
-// And can prove quorum: three distinct issuer DIDs all approve.
-const proof = store.quorumProof("order#4421", "approve", 3);
-console.log(proof.valid);      // true
-console.log(proof.signers);    // [didA, didB, didC]
+```
+OrgHR --vouches for--> EmploymentStatus
+                         |
+                         v
+                   AccountAccess (root)
 ```
 
-## Worked example: supersession
+The verifier resolves `AccountAccess`, follows the edge to `EmploymentStatus`,
+then follows OrgHR's employment assertion, evaluates a policy requiring
+"active employee of org with tier >= 2", and returns the witness.
 
-Issuer A first approves `order#4421` for `$100`, then later corrects it to
-`$150`. A publishes a `supersede` claim whose `parents` include the original
-approval ID. Any verifier resolving `head(order#4421)` follows the supersede
-edge and returns the new value.
+## Policy format
 
-```ts
-const approval = await Claim.create({
-  issuer: didA, signer: signerA, topic: "order#4421",
-  kind: "approve", statement: { amount: 100, currency: "USD" },
-  parents: [],
-});
+Policies are JSONLogic-style expressions evaluated against the resolved node
+map. `examples/cycle-detection-policy.json` shows a deny rule triggered when
+any node's issuer list contains the subject's own DID.
 
-const corrected = await Claim.create({
-  issuer: didA, signer: signerA, topic: "order#4421",
-  kind: "supersede",
-  statement: { amount: 150, currency: "USD", supersedes: approval.id },
-  parents: [approval.id],
-});
+## Composition with other patterns
 
-store.add(approval); store.add(corrected);
+- **Selective disclosure (Merkle proof)**: a claim graph node can carry an
+  SD-JWT VC payload; SD fields are revealed only at policy-evaluation time.
+- **Merkle inclusion proof**: large claim sets (e.g. "member of org X") can be
+  represented as a single node whose proof is a Merkle inclusion proof over a
+  published membership tree.
+- **Claim graph resolver**: the runtime in
+  `../claim-graph-resolver/src/policy-evaluator.ts` is the canonical evaluator.
 
-// head() follows supersede edges and returns the latest effective claim.
-const latest = store.head("order#4421");
-console.log(latest?.statement.amount); // 150
-```
+## Anti-patterns
 
-## Verification checklist
+- Treating the root claim as self-authenticating — it isn't.
+- Allowing cycles "because we trust the issuers" — a compromised key turns a
+  cycle into an infinite proof-of-trust loop.
+- Embedding PII in the graph itself. Put PII behind selective disclosure.
+- Mixing policy and routing logic in the same module.
 
-For each claim, a verifier MUST:
+## Status
 
-1. Recompute `id = sha256(canonicalize(payload))` and confirm it matches.
-2. Verify `sig` against `issuer` using the issuer's published verification key.
-3. Confirm every `parents[i]` resolves to a claim that also passes (1) and (2).
-4. Reject any claim whose DAG contains a cycle.
-5. Apply policy (quorum, kind filter, time window) on top.
-
-## Why this is composable
-
-- **Layer-agnostic**: claims are just JSON + a signature; transport is up to you.
-- **Self-contained**: a claim carries everything needed to verify it, including
-  pointers to its dependencies.
-- **Mergeable**: two parties can each publish half the DAG and any verifier can
-  join them by `id`.
-- **Policy at the edge**: quorum rules, allow-lists, and time windows are
-  verifier-side, not protocol-side.
-
-See `src/claim-graph.ts` for the full implementation (~140 lines, no deps).
+Draft, working. The reference resolver lives in
+`../claim-graph-resolver/`. The cycle detector and cache are reusable as-is.
 
 <!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
