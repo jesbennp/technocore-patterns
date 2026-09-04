@@ -1,0 +1,101 @@
+{
+  "$schema": "https://technocore.chat/schemas/composable-claim-graph/policy/v1",
+  "policyId": "policy:revocation-overlap-require-quorum-v1",
+  "description": "A composed policy that accepts a claim only if (a) the issuer is not revoked, (b) the subject is not revoked, AND (c) at least 2 of 3 corroborating attestations are themselves unrevoked. Demonstrates revocation-aware composition and quorum voting over the resolved graph.",
+  "version": "1.0.0",
+  "inputs": {
+    "rootClaimId": "claim:credential:employment:alice:acme-2025",
+    "now": "2025-06-01T12:00:00Z",
+    "revocationLookbackSeconds": 7776000
+  },
+  "rules": [
+    {
+      "id": "issuer-not-revoked",
+      "kind": "RevocationCheck",
+      "appliesTo": { "role": "issuer" },
+      "params": {
+        "statusList2021": "https://registry.acme.example/issuer-revocations.json",
+        "require": "unrevoked"
+      }
+    },
+    {
+      "id": "subject-not-revoked",
+      "kind": "RevocationCheck",
+      "appliesTo": { "role": "subject" },
+      "params": {
+        "statusList2021": "https://registry.acme.example/subject-revocations.json",
+        "require": "unrevoked"
+      }
+    },
+    {
+      "id": "corroboration-quorum",
+      "kind": "Quorum",
+      "appliesTo": { "role": "corroborator" },
+      "params": {
+        "minUnrevoked": 2,
+        "candidateClaims": [
+          "claim:attestation:tax:alice:2024",
+          "claim:attestation:address:alice:2025-05",
+          "claim:attestation:employment-history:alice:prev"
+        ]
+      }
+    },
+    {
+      "id": "graph-dag",
+      "kind": "Acyclicity",
+      "params": { "traversal": "forward", "maxDepth": 6 }
+    }
+  ],
+  "composition": {
+    "operator": "AND",
+    "shortCircuitOnFail": true
+  },
+  "examples": {
+    "pass": {
+      "comment": "Issuer and subject both unrevoked; 3 of 3 corroborators unrevoked; no cycles.",
+      "expectedDecision": "ACCEPT",
+      "evidenceRefs": [
+        "ev:revocation:issuer-acme:unrevoked",
+        "ev:revocation:subject-alice:unrevoked",
+        "ev:revocation:tax:unrevoked",
+        "ev:revocation:address:unrevoked",
+        "ev:revocation:employment-history:unrevoked",
+        "ev:graph:acyclic:depth<=6"
+      ]
+    },
+    "fail-revoked-issuer": {
+      "comment": "Issuer is revoked; fails before corroborators are evaluated due to short-circuit.",
+      "expectedDecision": "REJECT",
+      "evidenceRefs": [
+        "ev:revocation:issuer-acme:revoked:reason=key-compromise:ts=2025-05-20T10:00:00Z"
+      ]
+    },
+    "fail-quorum": {
+      "comment": "Both issuer and subject unrevoked, but only 1 of 3 corroborators is unrevoked.",
+      "expectedDecision": "REJECT",
+      "evidenceRefs": [
+        "ev:revocation:issuer-acme:unrevoked",
+        "ev:revocation:subject-alice:unrevoked",
+        "ev:revocation:tax:revoked",
+        "ev:revocation:address:revoked",
+        "ev:revocation:employment-history:unrevoked",
+        "ev:quorum:1of3:below-threshold"
+      ]
+    },
+    "fail-cycle": {
+      "comment": "A claim references a parent that transitively references back to the root claim.",
+      "expectedDecision": "REJECT",
+      "evidenceRefs": [
+        "ev:graph:cycle:claim:credential:employment:alice:acme-2025->claim:attestation:employment-history:alice:prev->claim:credential:employment:alice:acme-2025"
+      ]
+    }
+  },
+  "notes": [
+    "Rules are evaluated in declared order unless composition.shortCircuitOnFail=false.",
+    "RevocationCheck uses Status List 2021 bitstring entries; entries older than revocationLookbackSeconds are ignored to bound cache staleness.",
+    "Quorum's candidateClaims may be passed by reference (list above) or by a selector query, e.g. { 'tag': 'corroborates', 'subject': '$rootClaim.subject' }.",
+    "This policy composes cleanly with the existing cycle-detection-policy.json: include its rules by id ('graph-dag') and add this file's revocation+quorum rules."
+  ]
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
