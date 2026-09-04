@@ -1,0 +1,87 @@
+{
+  "$schema": "https://technocore.chat/schemas/composable-claim-graph/policy/v1.json",
+  "name": "policy-composition-with-not",
+  "version": "1.0.0",
+  "description": "Demonstrates boolean composition (AND/OR/NOT) over multiple claim-graph resolvers, including negation of a delegated sub-policy. Copy-pasteable example showing how to express 'the issuer must hold A AND B, must NOT have been revoked, and the subject must either have passed KYC OR be on a trusted allow-list'.",
+  "inputs": {
+    "subject": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGznnYspa8u9cv",
+    "required_actions": ["read:medical-record"]
+  },
+  "root": {
+    "op": "and",
+    "children": [
+      {
+        "op": "resolve",
+        "resolver": "attestation-resolver",
+        "claim_path": "$.credentials[?(@.type=='IssuerCredential')].issuer",
+        "expect": "did:key:z6MkiTBm3iLLEx5tEH6S8iN8D9V7b5f2c3a4b5c6d7e8f9a0b1c2d3e4f5"
+      },
+      {
+        "op": "and",
+        "children": [
+          {
+            "op": "resolve",
+            "resolver": "attestation-resolver",
+            "claim_path": "$.credentials[?(@.type=='GoodStandingCredential')].status",
+            "expect": "active"
+          },
+          {
+            "op": "resolve",
+            "resolver": "revocation-resolver",
+            "claim_path": "$.revocations[*].subject",
+            "expect_not_includes": "did:key:z6MkiTBm3iLLEx5tEH6S8iN8D9V7b5f2c3a4b5c6d7e8f9a0b1c2d3e4f5"
+          },
+          {
+            "op": "not",
+            "child": {
+              "op": "resolve",
+              "resolver": "delegated-policy-resolver",
+              "policy_ref": "patterns/composable-claim-graph/examples/recursive-attestation-chain.json",
+              "claim_path": "$.flags.sanctioned",
+              "expect": true
+            }
+          }
+        ]
+      },
+      {
+        "op": "or",
+        "children": [
+          {
+            "op": "resolve",
+            "resolver": "attestation-resolver",
+            "claim_path": "$.credentials[?(@.type=='KycCredential')].level",
+            "expect": "enhanced"
+          },
+          {
+            "op": "resolve",
+            "resolver": "allowlist-resolver",
+            "list_id": "trusted-research-partners-2026",
+            "claim_path": "$.members[*].did",
+            "expect_includes": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGznnYspa8u9cv"
+          }
+        ]
+      }
+    ]
+  },
+  "expected_outcome": {
+    "allow": true,
+    "trace": [
+      "and[0] -> resolve issuer match: PASS",
+      "and[1] -> and[1.0] resolve good-standing active: PASS",
+      "and[1] -> and[1.1] resolve revocation-list does NOT include issuer: PASS",
+      "and[1] -> and[1.2] not( delegated policy flagged sanctioned ): PASS (sanctioned=false)",
+      "and[2] -> or[2.0] resolve kyc level=enhanced: PASS (short-circuits or)",
+      "ROOT: AND of all PASS => allow=true"
+    ]
+  },
+  "notes": [
+    "Boolean operators 'and', 'or', 'not' are commutative except 'not' which wraps exactly one child.",
+    "Short-circuit evaluation: 'or' stops on first PASS; 'and' stops on first FAIL; 'not' always evaluates its child then inverts.",
+    "Each 'resolve' node binds to a named resolver (attestation-resolver, revocation-resolver, allowlist-resolver, delegated-policy-resolver) — see patterns/claim-graph-resolver/src/cache.ts for the resolver interface.",
+    "expect_not_includes is the array-negation companion to expect_includes; useful for revocation and denylist checks.",
+    "Recursion safety: the 'not' node pointing at a delegated policy is bounded by the cycle-detector (see patterns/claim-graph-resolver/src/cycle-detector.ts); policies that loop through negation are rejected at load time.",
+    "Failure-mode example: if the issuer is in the revocation list, and[1.1] fails, the root AND fails fast and allow=false; the trace records the first FAIL only by default — set trace_mode='all' to capture every node evaluation."
+  ]
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
