@@ -1,182 +1,143 @@
-// patterns/claim-graph-resolver/src/cache.ts
+"use strict";
+// In-memory resolver cache with LRU eviction and negative caching.
+// Pattern: deterministic keys, content-hashable values, optional TTL, optional negative caching.
+// This is a building block for any recursive claim-graph resolver — caching resolved claims
+// avoids re-walking the same sub-graph thousands of times in policy evaluation.
 //
-// A small, dependency-free caching layer for the claim-graph resolver.
-// Rationale: when you dereference a DID or fetch a verifiable claim over the
-// network, the response is content-addressed and (ideally) immutable. That
-// makes it perfect for a bounded LRU cache keyed by the request URL.
-//
-// The resolver in ./resolver.ts is intentionally synchronous-looking — it
-// returns whatever the resolver instance has. This cache wraps any async
-// resolver and adds: (1) TTL, (2) LRU eviction, (3) single-flight so a
-// thundering herd of concurrent lookups for the same URL only hits the
-// network once.
-//
-// Worked usage:
-//
-//   import { CachingResolver } from "./cache";
-//   import { HttpResolver } from "./resolver";
-//
-//   const resolver = new CachingResolver(new HttpResolver(), {
-//     maxEntries: 500,
-//     ttlMs: 60_000,
-//   });
-//
-//   // Two concurrent calls for the same URL share one network fetch.
-//   const [a, b] = await Promise.all([
-//     resolver.resolve("did:example:abc"),
-//     resolver.resolve("did:example:abc"),
-//   ]);
-//   assert.strictEqual(a, b);
-//
-// The cache is transparent: callers still get a Result type identical to the
-// underlying resolver's. Invalidation is by TTL only; if you need to bust an
-// entry (e.g. a 401), call resolver.invalidate(url).
+// Why it matters: a single top-level policy eval may resolve the same `did:example:foo` claim
+// dozens of times (different paths, cycle-breaking retries, etc.). A small cache collapses that
+// to one upstream fetch per key within the TTL window.
 
-export type ResolveResult = {
-  ok: boolean;
-  url: string;
-  value?: unknown;
-  error?: string;
-  fetchedAt: number;
-  fromCache: boolean;
+const DEFAULT_MAX = 1000;
+const DEFAULT_TTL_MS = 60_000;
+const NEG_TTL_MS = 10_000;
+
+export type CacheEntry<V> = {
+  value: V;
+  expiresAt: number; // epoch ms; 0 = no expiry
+  insertedAt: number;
+  hits: number;
 };
 
-export interface Resolver {
-  resolve(url: string): Promise<ResolveResult>;
-  invalidate(url: string): void;
-}
-
-export interface CacheOptions {
-  /** Max entries before LRU eviction. Default 256. */
-  maxEntries?: number;
-  /** Time-to-live per entry in ms. Default 30_000. */
+export type CacheOptions = {
+  max?: number;
   ttlMs?: number;
-  /** Optional clock for tests. */
-  now?: () => number;
-}
+  negativeTtlMs?: number;
+  now?: () => number; // injectable clock for tests
+};
 
-interface Entry {
-  value: ResolveResult;
-  expiresAt: number;
-}
-
-type PendingMap = Map<string, Promise<ResolveResult>>;
-
-export class CachingResolver implements Resolver {
-  private readonly inner: Resolver;
-  private readonly maxEntries: number;
+export class ResolverCache<V> {
+  private readonly max: number;
   private readonly ttlMs: number;
+  private readonly negativeTtlMs: number;
   private readonly now: () => number;
-  private readonly entries = new Map<string, Entry>();
-  private readonly inflight: PendingMap = new Map();
+  // Map preserves insertion order; combined with re-insert on hit we get LRU semantics.
+  private readonly store = new Map<string, CacheEntry<V>>();
 
-  constructor(inner: Resolver, opts: CacheOptions = {}) {
-    this.inner = inner;
-    this.maxEntries = Math.max(1, opts.maxEntries ?? 256);
-    this.ttlMs = Math.max(0, opts.ttlMs ?? 30_000);
+  // Stats — useful for logs and for deciding whether to tune TTL/max in production.
+  public stats = {
+    hits: 0,
+    misses: 0,
+    negatives: 0,
+    evictions: 0,
+    expirations: 0,
+  };
+
+  constructor(opts: CacheOptions = {}) {
+    this.max = Math.max(1, opts.max ?? DEFAULT_MAX);
+    this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+    this.negativeTtlMs = opts.negativeTtlMs ?? NEG_TTL_MS;
     this.now = opts.now ?? Date.now;
   }
 
-  async resolve(url: string): Promise<ResolveResult> {
-    const hit = this.entries.get(url);
-    if (hit && hit.expiresAt > this.now()) {
-      // LRU touch: re-insert to move to most-recently-used end.
-      this.entries.delete(url);
-      this.entries.set(url, hit);
-      return { ...hit.value, fromCache: true };
-    }
-    if (hit) {
-      // Expired — drop and refetch.
-      this.entries.delete(url);
-    }
-
-    const pending = this.inflight.get(url);
-    if (pending) return pending;
-
-    const p = (async () => {
-      try {
-        const fresh = await this.inner.resolve(url);
-        const stamped: ResolveResult = { ...fresh, fromCache: false };
-        this.set(url, stamped);
-        return stamped;
-      } finally {
-        this.inflight.delete(url);
-      }
-    })();
-    this.inflight.set(url, p);
-    return p;
+  /** Build a stable cache key from the parts a resolver actually cares about. */
+  static key(...parts: Array<string, number>): string {
+    return parts
+      .map((p) => (typeof p === "number" ? String(p) : p))
+      .join("|");
   }
 
-  invalidate(url: string): void {
-    this.entries.delete(url);
-    this.inner.invalidate?.(url);
+  get(key: string): V | undefined {
+    const e = this.store.get(key);
+    if (!e) {
+      this.stats.misses++;
+      return undefined;
+    }
+    if (e.expiresAt !== 0 && e.expiresAt <= this.now()) {
+      this.store.delete(key);
+      this.stats.expirations++;
+      this.stats.misses++;
+      return undefined;
+    }
+    // LRU touch
+    this.store.delete(key);
+    e.hits++;
+    this.store.set(key, e);
+    this.stats.hits++;
+    return e.value;
   }
 
-  /** Drop everything. Useful between tests. */
+  set(key: string, value: V, opts: { ttlMs?: number; negative?: boolean } = {}): void {
+    if (this.store.has(key)) this.store.delete(key);
+    const ttl = opts.ttlMs ?? (opts.negative ? this.negativeTtlMs : this.ttlMs);
+    this.store.set(key, {
+      value,
+      expiresAt: ttl > 0 ? this.now() + ttl : 0,
+      insertedAt: this.now(),
+      hits: 0,
+    });
+    if (opts.negative) this.stats.negatives++;
+    this.evictIfNeeded();
+  }
+
+  delete(key: string): boolean {
+    return this.store.delete(key);
+  }
+
   clear(): void {
-    this.entries.clear();
+    this.store.clear();
   }
 
-  /** Stats for observability / tests. */
-  stats(): { size: number; inflight: number; maxEntries: number; ttlMs: number } {
-    return {
-      size: this.entries.size,
-      inflight: this.inflight.size,
-      maxEntries: this.maxEntries,
-      ttlMs: this.ttlMs,
-    };
+  size(): number {
+    return this.store.size;
   }
 
-  private set(url: string, value: ResolveResult): void {
-    if (this.entries.has(url)) this.entries.delete(url);
-    this.entries.set(url, { value, expiresAt: this.now() + this.ttlMs });
-    while (this.entries.size > this.maxEntries) {
-      // Map iteration order is insertion order, so the first key is the LRU.
-      const oldest = this.entries.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.entries.delete(oldest);
+  private evictIfNeeded(): void {
+    while (this.store.size > this.max) {
+      // First key in iteration order is the least-recently-used (oldest untouched).
+      const oldest = this.store.keys().next().value;
+      if (oldest === undefined) break;
+      this.store.delete(oldest);
+      this.stats.evictions++;
     }
   }
 }
 
-// -- Self-test (run with: npx tsx patterns/claim-graph-resolver/src/cache.ts) --
-if (typeof require !== 'undefined' && require.main === module) {
-  (async () => {
-    const calls: string[] = [];
-    const fake: Resolver = {
-      async resolve(url: string): Promise<ResolveResult> {
-        calls.push(url);
-        // Simulate latency so single-flight is observable.
-        await new Promise((r) => setTimeout(r, 10));
-        return { ok: true, url, value: { id: url }, fetchedAt: Date.now(), fromCache: false };
-      },
-      invalidate() {},
-    };
-    const c = new CachingResolver(fake, { maxEntries: 2, ttlMs: 1_000 });
+// --- Worked example: how to wire the cache into a recursive claim resolver ---
+// (Not exported via the public API; shown so the file is self-documenting.)
+/*
+import type { ClaimResolver } from "./types";
 
-    const [a, b, d] = await Promise.all([
-      c.resolve("u1"),
-      c.resolve("u1"),
-      c.resolve("u2"),
-    ]);
-    if (calls.length !== 2) throw new Error(`expected 2 upstream calls, got ${calls.length}`);
-    if (a.value !== b.value) throw new Error("concurrent lookups should share one result");
-    if (!b.fromCache || !d.fromCache) throw new Error("subsequent reads should be cached");
-
-    c.invalidate("u1");
-    await c.resolve("u1");
-    if (calls.length !== 3) throw new Error(`expected 3 upstream calls after invalidate, got ${calls.length}`);
-
-    // LRU eviction: fill to maxEntries+1
-    await c.resolve("u3");
-    await c.resolve("u4"); // evicts u2
-    if (c.stats().size !== 2) throw new Error(`expected size 2, got ${c.stats().size}`);
-
-    console.log("cache self-test OK", c.stats());
-  })().catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+export function withCache<V>(
+  inner: ClaimResolver<V>,
+  opts: CacheOptions = {}
+): ClaimResolver<V> {
+  const c = new ResolverCache<V>(opts);
+  return async (id, depth) => {
+    const k = ResolverCache.key(id, depth);
+    const hit = c.get(k);
+    if (hit !== undefined) return hit;
+    try {
+      const v = await inner(id, depth);
+      c.set(k, v);
+      return v;
+    } catch (err) {
+      // Negative cache: cache the throw so we don't hammer an unreachable node.
+      c.set(k, undefined as unknown as V, { negative: true });
+      throw err;
+    }
+  };
 }
+*/
 
 <!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
