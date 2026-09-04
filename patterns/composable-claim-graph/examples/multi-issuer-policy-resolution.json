@@ -1,0 +1,143 @@
+{
+  "$schema": "https://technocore.chat/schemas/composable-claim-graph/policy-v1.json",
+  "title": "Multi-Issuer Trust Policy with Threshold Attestation",
+  "description": "Resolves a claim graph where a single claim requires corroboration from multiple independent issuers. Demonstrates composable policy: a top-level access decision is granted only when at least 2 of 3 possible attestations are present and valid, even when those attestations live in different sub-graphs with different roots.",
+  "version": "1.0.0",
+  "policy_id": "did:key:z6Mkkthreshold2of3multiissuer",
+  "graph_input": {
+    "entry_claim": "claim:access:production-deployment",
+    "strategy": "recursive",
+    "max_depth": 6
+  },
+  "nodes": [
+    {
+      "id": "claim:access:production-deployment",
+      "kind": "claim",
+      "issuer": "did:key:z6MkiAccessGate",
+      "subject": "did:key:z6MkqServicePrincipal",
+      "issued_at": "2025-11-01T00:00:00Z",
+      "depends_on": [
+        "bundle:required-evidence"
+      ],
+      "policy_hint": "require_threshold:2"
+    },
+    {
+      "id": "bundle:required-evidence",
+      "kind": "bundle",
+      "threshold": 2,
+      "members": [
+        "claim:security:pentest-clear",
+        "claim:compliance:soc2-bridge-letter",
+        "claim:operations:oncall-rotation"
+      ]
+    },
+    {
+      "id": "claim:security:pentest-clear",
+      "kind": "claim",
+      "issuer": "did:key:z6MkpPentestVendorA",
+      "subject": "did:key:z6MkqServicePrincipal",
+      "issued_at": "2025-10-12T00:00:00Z",
+      "expires_at": "2026-01-10T00:00:00Z",
+      "depends_on": [
+        "claim:scope:engagement-letter"
+      ],
+      "signature": {
+        "type": "Ed25519Signature2020",
+        "proof_value": "z3FXdP3vq9Yx8nQbWk2LrM4VtHsJ7aCdEoP5uKi6TfRgNhMvB"
+      }
+    },
+    {
+      "id": "claim:compliance:soc2-bridge-letter",
+      "kind": "claim",
+      "issuer": "did:key:z6MkaComplianceAuditor",
+      "subject": "did:key:z6MkqServicePrincipal",
+      "issued_at": "2025-09-20T00:00:00Z",
+      "expires_at": "2026-09-20T00:00:00Z",
+      "depends_on": [
+        "claim:audit:bridge-letter-2025"
+      ],
+      "signature": {
+        "type": "Ed25519Signature2020",
+        "proof_value": "aG2K9pLr4tYxBcDfEgHjMnPqRsTuVwXzAbCdEfGhJkLnOpQrS"
+      }
+    },
+    {
+      "id": "claim:operations:oncall-rotation",
+      "kind": "claim",
+      "issuer": "did:key:z6MkoSreOwner",
+      "subject": "did:key:z6MkqServicePrincipal",
+      "issued_at": "2025-11-05T00:00:00Z",
+      "depends_on": [],
+      "signature": {
+        "type": "Ed25519Signature2020",
+        "proof_value": "mN5oP6qR7sT8uV9wXyZ0aB1cD2eF3gH4iJ5kL6mN7oP8qR9s"
+      }
+    },
+    {
+      "id": "claim:scope:engagement-letter",
+      "kind": "claim",
+      "issuer": "did:key:z6MkqServicePrincipal",
+      "subject": "did:key:z6MkpPentestVendorA",
+      "issued_at": "2025-10-01T00:00:00Z",
+      "depends_on": []
+    },
+    {
+      "id": "claim:audit:bridge-letter-2025",
+      "kind": "claim",
+      "issuer": "did:key:z6MkaComplianceAuditor",
+      "subject": "did:key:z6MkqServicePrincipal",
+      "issued_at": "2025-08-15T00:00:00Z",
+      "depends_on": [
+        "report:soc2-type2-2025"
+      ]
+    },
+    {
+      "id": "report:soc2-type2-2025",
+      "kind": "report",
+      "source": "https://auditor.example.com/reports/soc2-2025.pdf",
+      "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "depends_on": []
+    }
+  ],
+  "policy": {
+    "type": "composite",
+    "operator": "AND",
+    "clauses": [
+      {
+        "type": "node_valid",
+        "node": "claim:access:production-deployment"
+      },
+      {
+        "type": "threshold",
+        "minimum": 2,
+        "from_bundle": "bundle:required-evidence",
+        "constraints": {
+          "signature_required": true,
+          "not_expired_at_eval_time": true,
+          "distinct_issuers": true
+        }
+      },
+      {
+        "type": "depth_guard",
+        "max_depth": 6,
+        "on_violation": "reject"
+      }
+    ]
+  },
+  "expected_resolution": {
+    "outcome": "allow",
+    "satisfying_evidence": [
+      "claim:security:pentest-clear",
+      "claim:operations:oncall-rotation"
+    ],
+    "non_satisfying_evidence": [
+      {
+        "node": "claim:compliance:soc2-bridge-letter",
+        "reason": "not_required_by_threshold"
+      }
+    ],
+    "explanation": "Threshold of 2 is met by pentest clearance and on-call attestation; the SOC2 bridge letter is valid but unnecessary given threshold reached. All evidence issuers are distinct, signatures verified, and no node exceeds max_depth."
+  }
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
