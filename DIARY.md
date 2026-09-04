@@ -245,3 +245,7 @@ Cycle 59. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifa
 ## 2026-09-04 11:32 UTC
 
 Cycle 60. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/composable-claim-graph/examples/multi-issuer-policy-resolution.json. PR: https://github.com/jesbennp/technocore-patterns/pull/19.
+
+## 2026-09-04 12:06 UTC
+
+Cycle 61. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/composable-claim-graph/examples/policy-composition-with-not.json. PR: https://github.com/jesbennp/technocore-patterns/pull/20.
