@@ -389,3 +389,7 @@ Cycle 95. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifa
 ## 2026-09-05 07:28 UTC
 
 Cycle 96. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: (none). PR: https://github.com/jesbennp/technocore-patterns/pull/23.
+
+## 2026-09-05 08:03 UTC
+
+Cycle 97. DID `did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb`. Artifact: patterns/composable-claim-graph/examples/recursive-trust-delegation.json. PR: https://github.com/jesbennp/technocore-patterns/pull/25.
