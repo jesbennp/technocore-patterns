@@ -1,0 +1,92 @@
+{
+  "$schema": "https://technocore.example/schemas/composable-claim-graph/policy-v2.json",
+  "title": "Temporal Validity with Revocation Overrides",
+  "description": "Demonstrates composing an issuance window claim with a revocation-status claim. The pattern shows that a credential is valid only if (a) its notBefore <= now < its expirationDate AND (b) no revocation entry exists after its issuance. Useful for offline-first verifiers that receive policy bundles out of order and must resolve temporal and revocation precedence deterministically.",
+  "version": "1.0.0",
+  "inputs": {
+    "credential": {
+      "type": "VerifiableCredential",
+      "id": "urn:uuid:7c4e2b1a-9d3f-4a8e-b5c6-1f2e3d4c5b6a",
+      "issuer": "did:key:z6MkissuerAcmeCorp",
+      "issuanceDate": "2025-06-01T00:00:00Z",
+      "expirationDate": "2026-06-01T00:00:00Z",
+      "credentialSubject": {
+        "id": "did:key:z6MksubjectAlice",
+        "degree": "B.Sc. Computer Science"
+      }
+    },
+    "evaluationTime": "2025-09-15T12:00:00Z"
+  },
+  "claims": {
+    "temporal_window": {
+      "type": "TemporalValidity",
+      "derivedFrom": "credential",
+      "predicate": "inWindow",
+      "fields": {
+        "notBefore": "credential.issuanceDate",
+        "notAfter": "credential.expirationDate"
+      },
+      "evaluator": "temporal"
+    },
+    "revocation_status": {
+      "type": "RevocationStatus",
+      "derivedFrom": "credential",
+      "predicate": "notRevoked",
+      "fields": {
+        "credentialId": "credential.id",
+        "asOf": "evaluationTime",
+        "registryEndpoint": "https://revocation.acme.example/statuslist/2025"
+      },
+      "evaluator": "revocation"
+    }
+  },
+  "composition": {
+    "rootPredicate": "credentialValid",
+    "operator": "AND",
+    "operands": [
+      { "claim": "temporal_window" },
+      { "claim": "revocation_status" }
+    ],
+    "shortCircuitOnFalse": true,
+    "precedenceRule": "FAIL_FAST"}
+  },
+  "expectedOutputs": {
+    "credentialValid": true,
+    "evaluatedAt": "2025-09-15T12:00:00Z",
+    "trace": [
+      { "step": 1, "claim": "temporal_window", "result": true, "reason": "2025-09-15T12:00:00Z is within [2025-06-01T00:00:00Z, 2026-06-01T00:00:00Z)" },
+      { "step": 2, "claim": "revocation_status", "result": true, "reason": "No revocation entry found on registry for urn:uuid:7c4e2b1a-9d3f-4a8e-b5c6-1f2e3d4c5b6a as of 2025-09-15T12:00:00Z" }
+    ]
+  },
+  "failureModes": [
+    {
+      "name": "expired",
+      "trigger": "evaluationTime >= credential.expirationDate",
+      "expectedResult": { "credentialValid": false, "failedClaim": "temporal_window" }
+    },
+    {
+      "name": "revoked",
+      "trigger": "Registry returns a statusListEntry with status='revoked' published at t_r, where t_r <= evaluationTime AND t_r >= credential.issuanceDate",
+      "expectedResult": { "credentialValid": false, "failedClaim": "revocation_status" }
+    },
+    {
+      "name": "pre_revocation_publication",
+      "trigger": "Revocation entry exists but was published before credential.issuanceDate (e.g. reused registry index across credential lifetimes)",
+      "expectedResult": { "credentialValid": true, "note": "Revocation checks must be bounded by issuance; pre-issuance entries are ignored to avoid false negatives." }
+    },
+    {
+      "name": "evaluator_unavailable",
+      "trigger": "revocation registry endpoint returns 5xx or times out",
+      "expectedResult": { "credentialValid": "UNDETERMINED", "failedClaim": "revocation_status", "policy": "FAIL_CLOSED" }
+    }
+  ],
+  "implementerNotes": {
+    "cacheRevocationFor": "PT5M",
+    "clockSkewTolerance": "PT30S",
+    "registryFormat": "BitstringStatusList (W3C vc-bitstring-status-list) v1.0",
+    "orderingInvariant": "Verifiers MUST evaluate temporal_window before revocation_status when both succeed independently; on failure either suffices to short-circuit.",
+    "workupSnippet": "const ok = compose([temporalWindow(cred), notRevoked(cred, opts)])['AND'];"
+  }
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
