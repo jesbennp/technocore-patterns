@@ -1,0 +1,107 @@
+{
+  "$schema": "https://technocore.chat/schemas/composable-claim-graph/v1/policy-resolution.json",
+  "title": "Recursive Policy with Revocation-Aware Trust",
+  "description": "Demonstrates how a resolver evaluates a deeply nested policy that walks an issuer's chain AND honors revocation status at every node. Useful for trust frameworks where intermediate CAs lose authority mid-flight (e.g. compromised key, sunset period).",
+  "policy": {
+    "op": "and",
+    "args": [
+        { "op": "claim", "path": "/issuer/identity/verified" },
+        { "op": "not-claim", "path": "/issuer/identity/revoked" },
+        {
+          "op": "delegate",
+          "target": "did:key:z6MkhaX3BPTwbXQjJzRqQqYxkf4Rn3LmNopPqR4tL8gH8w7N",
+          "policy": {
+            "op": "or",
+            "args": [
+              { "op": "claim", "path": "/legal/representative" },
+              {
+                "op": "and",
+                "args": [
+                  { "op": "claim", "path": "/legal/agent/authorized" },
+                  { "op": "not-claim", "path": "/legal/agent/revoked" },
+                  {
+                    "op": "delegate",
+                    "target": "did:key:z6MkjNoxcQj8sK9p4e2VtR7yW5bX1n3LmNopPqR4tL8gH8w7N",
+                    "policy": {
+                      "op": "claim",
+                      "path": "/capability/sign-contracts",
+                      "constraint": { "max-depth": 3 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+  },
+  "resolution": {
+    "result": "DENY",
+    "reason": "REVOCATION_AT_DEPTH_2",
+    "evaluated_path": [
+      {"op":"claim","path":"/issuer/identity/verified","verdict":"PASS"},
+      {"op":"not-claim","path":"/issuer/identity/revoked","verdict":"PASS"},
+      {"op":"delegate","target":"did:key:z6MkhaX3...","verdict":"FAIL"},
+      {"op":"claim","path":"/legal/representative","verdict":"FAIL"},
+      {"op":"claim","path":"/legal/agent/authorized","verdict":"PASS"},
+      {"op":"not-claim","path":"/legal/agent/revoked","verdict":"FAIL","reason":"claim.revoked=true since 2026-03-01T00:00:00Z"},
+      {"op":"delegate","target":"did:key:z6MkjNox...","verdict":"SKIPPED"}
+    ],
+    "short_circuit": true
+  },
+  "notes": [
+    "Resolvers MUST short-circuit on REVOCATION at any depth: a revoked delegation poisons all subtrees, even if other branches would have passed.",
+    "This differs from cycle-detection (which guards against infinite recursion): revocation is a terminal condition that fails fast.",
+    "Implementations should emit a structured event per evaluated node so auditors can reconstruct the full walk.",
+    "The max-depth constraint on the innermost claim prevents unbounded recursion even when revocations are absent.",
+    "Pair with patterns/claim-graph-resolver/src/cache.ts: a revocation event MUST invalidate any cached subtree rooted at the revoked principal."
+  ],
+  "test_vectors": [
+    {
+      "name": "happy_path_no_revocation",
+      "input": {
+        "/issuer/identity/verified": true,
+        "/issuer/identity/revoked": false,
+        "/legal/representative": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "name": "agent_path_no_revocation",
+      "input": {
+        "/issuer/identity/verified": true,
+        "/issuer/identity/revoked": false,
+        "/legal/representative": false,
+        "/legal/agent/authorized": true,
+        "/legal/agent/revoked": false,
+        "/capability/sign-contracts": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "name": "agent_revoked",
+      "input": {
+        "/issuer/identity/verified": true,
+        "/issuer/identity/revoked": false,
+        "/legal/representative": false,
+        "/legal/agent/authorized": true,
+        "/legal/agent/revoked": true,
+        "/capability/sign-contracts": true
+      },
+      "expected": "DENY",
+      "expected_reason": "REVOCATION_AT_DEPTH_2"
+    },
+    {
+      "name": "issuer_revoked_overrides_representative",
+      "input": {
+        "/issuer/identity/verified": true,
+        "/issuer/identity/revoked": true,
+        "/legal/representative": true
+      },
+      "expected": "DENY",
+      "expected_reason": "REVOCATION_AT_DEPTH_1"
+    }
+  ]
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
