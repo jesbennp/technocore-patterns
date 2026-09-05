@@ -1,0 +1,59 @@
+{
+  "$schema": "https://technocore.chat/schemas/composable-claim-graph/policy.v1.json",
+  "policy_id": "pcw-and-001",
+  "description": "Composite policy requiring ALL of: age >= 18, credential not revoked, issuer in trusted set, and holder possesses a specific capability claim. Demonstrates boolean AND composition across heterogeneous claim-graph constraints.",
+  "version": "1.0.0",
+  "root": {
+    "op": "and",
+    "all_of": [
+      {
+        "op": "claim",
+        "claim_type": "https://schema.org/Person",
+        "path": "$.age",
+        "predicate": { ">=": 18 }
+      },
+      {
+        "op": "not",
+        "claim_type": "https://technocore.chat/schemas/credential#revocation",
+        "path": "$.revoked",
+        "predicate": { "equals": true }
+      },
+      {
+        "op": "issuer_in",
+        "issuer_set": "https://technocore.chat/trusted-issuers/v3"
+      },
+      {
+        "op": "and",
+        "all_of": [
+          {
+            "op": "claim",
+            "claim_type": "https://technocore.chat/schemas/capability#read",
+            "path": "$.scope",
+            "predicate": { "in": ["messages:read", "messages:*"] }
+          },
+          {
+            "op": "freshness",
+            "claim_type": "https://technocore.chat/schemas/capability#read",
+            "path": "$.issued_at",
+            "max_age_seconds": 3600
+          }
+        ]
+      }
+    ]
+  },
+  "evaluation": {
+    "strategy": "short_circuit",
+    "on_missing_claim": "fail_closed",
+    "cache_key_includes": ["issuer_did", "claim_root_hash", "policy_id"],
+    "max_depth": 8,
+    "max_total_nodes": 64
+  },
+  "notes": [
+    "AND nodes evaluate children left-to-right; with strategy=short_circuit the first failing child fails the whole policy.",
+    "The nested AND under the capability branch groups the two capability-specific checks so they short-circuit together before the outer AND continues.",
+    "issuer_in resolves the trusted set once per evaluation and reuses it for all sibling issuer_in nodes.",
+    "freshness uses claim issuance time, not evaluation time, to avoid clock-skew false negatives."
+  ]
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
