@@ -1,0 +1,105 @@
+{
+  "$schema": "https://technocore.dev/schemas/composable-claim-graph/v1/policy-resolution.json",
+  "id": "ex:recursive-trust-delegation-v1",
+  "description": "Demonstrates a multi-hop trust delegation: a relying party accepts a claim iff it is signed by either the root authority OR any party the root has delegated trust to, recursively up to depth 3. Uses $ref chains rather than copying issuer lists, so delegation is composable and cache-friendly.",
+  "policy": {
+    "id": "policy:delegate-recursive",
+    "issuer": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot",
+    "validFrom": "2026-01-01T00:00:00Z",
+    "rules": [
+      {
+        "op": "or",
+        "any": [
+          {
+            "op": "attest",
+            "claim": "claim:root-is-issuer",
+            "requireIssuer": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot"
+          },
+          {
+            "op": "attest",
+            "claim": "claim:delegation-grant",
+            "requireIssuer": { "$ref": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot" },
+            "constrain": {
+              "subject": { "$ref": "#issuer" },
+              "predicate": "canIssue",
+              "value": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "resolver": {
+    "maxDepth": 3,
+    "cyclePolicy": "reject-on-cycle",
+    "cache": {
+      "strategy": "lru",
+      "maxEntries": 1024,
+      "ttlSeconds": 300,
+      "key": "sha256(policyId + claimHash + issuerDid)"
+    },
+    "fetchHints": {
+      "claim:root-is-issuer": "https://anchors.technocore.dev/root-attestation.json",
+      "claim:delegation-grant": "https://anchors.technocore.dev/delegation/{issuer}.json"
+    }
+  },
+  "examples": [
+    {
+      "label": "direct root signature (depth 0)",
+      "issuer": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot",
+      "claim": { "id": "claim:root-is-issuer", "subject": "did:example:user123", "predicate": "kycVerified", "value": true },
+      "expectedResult": { "allow": true, "depth": 0, "path": ["root"] }
+    },
+    {
+      "label": "single-hop delegation (depth 1)",
+      "issuer": "did:key:z6MkDelegateOneDelegateOneDelegateOneDelegate",
+      "claim": { "id": "claim:delegation-grant", "subject": "did:example:user123", "predicate": "kycVerified", "value": true },
+      "supporting": [
+        {
+          "issuer": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot",
+          "claim": { "id": "claim:delegation-grant", "subject": "did:key:z6MkDelegateOneDelegateOneDelegateOneDelegate", "predicate": "canIssue", "value": true }
+        }
+      ],
+      "expectedResult": { "allow": true, "depth": 1, "path": ["root", "delegate-1"] }
+    },
+    {
+      "label": "two-hop delegation (depth 2)",
+      "issuer": "did:key:z6MkDelegateTwoDelegateTwoDelegateTwo",
+      "claim": { "id": "claim:delegation-grant", "subject": "did:example:user123", "predicate": "kycVerified", "value": true },
+      "supporting": [
+        {
+          "issuer": "did:key:z6MkDelegateOneDelegateOneDelegateOneDelegate",
+          "claim": { "id": "claim:delegation-grant", "subject": "did:key:z6MkDelegateTwoDelegateTwoDelegateTwo", "predicate": "canIssue", "value": true }
+        },
+        {
+          "issuer": "did:key:z6MkRootAuthorityRootAuthorityRootAuthorityRoot",
+          "claim": { "id": "claim:delegation-grant", "subject": "did:key:z6MkDelegateOneDelegateOneDelegateOneDelegate", "predicate": "canIssue", "value": true }
+        }
+      ],
+      "expectedResult": { "allow": true, "depth": 2, "path": ["root", "delegate-1", "delegate-2"] }
+    },
+    {
+      "label": "delegation beyond maxDepth must be rejected",
+      "issuer": "did:key:z6MkDelegateFourDelegateFourDelegate",
+      "claim": { "id": "claim:delegation-grant", "subject": "did:example:user123", "predicate": "kycVerified", "value": true },
+      "supporting_chain_length": 4,
+      "expectedResult": { "allow": false, "reason": "maxDepth exceeded (got 4, limit 3)" }
+    },
+    {
+      "label": "cycle in delegation must be rejected",
+      "graph": {
+        "A": ["B"],
+        "B": ["C"],
+        "C": ["A"]
+      },
+      "expectedResult": { "allow": false, "reason": "cycle detected: A -> B -> C -> A", "detector": "patterns/claim-graph-resolver/src/cycle-detector.ts" }
+    }
+  ],
+  "notes": [
+    "The $ref on requireIssuer lets the resolver pin the signer to whichever DID ended up being the issuer of the supporting claim — this is what makes delegation traversal work without enumerating delegates inline.",
+    "Depth is measured as supporting-claim hops from the root, not as JSON nesting, so the cap is intuitive for operators.",
+    "Combine with patterns/composable-claim-graph/examples/cycle-detection-policy.json to see how cycles are short-circuited before depth is consumed."
+  ]
+}
+
+<!-- Authored by Technocore agent DID did:key:z6MkkBJtsNVp6TAagvoaM2c7oyUoh3frtpemqirqmiGVvQyb -->
